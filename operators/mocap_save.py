@@ -1,7 +1,7 @@
 import bpy
 import os
 from datetime import datetime
-from ..utils import paths, naming
+from ..utils import paths, naming, logger
 
 class EKPV_OT_SaveMocapAction(bpy.types.Operator):
     """Save current blend file as mocap recording (non-destructive workflow)"""
@@ -11,9 +11,7 @@ class EKPV_OT_SaveMocapAction(bpy.types.Operator):
     bl_options = {'REGISTER'}
 
     def execute(self, context):
-        # We don't necessarily need an active object/action to save the FILE,
-        # but the spec says "Detect active Faceit control rig action".
-        # It's good practice to ensure we have something relevant.
+        logger.info("Starting Mocap Recording Save...")
         
         # Get Preferences
         try:
@@ -26,6 +24,7 @@ class EKPV_OT_SaveMocapAction(bpy.types.Operator):
             if bpy.data.filepath:
                 project_root = os.path.dirname(bpy.data.filepath)
             else:
+                logger.error("Project root not set and file not saved.")
                 self.report({'ERROR'}, "Save file or set Project Root in preferences")
                 return {'CANCELLED'}
         else:
@@ -36,6 +35,7 @@ class EKPV_OT_SaveMocapAction(bpy.types.Operator):
         date_str = date_obj.strftime("%Y-%m-%d")
         
         mocap_dir = paths.get_mocap_dir(project_root, ensure=True)
+        logger.debug(f"Scanning mocap directory: {mocap_dir}")
         
         # Scan for existing sessions to determine next number
         max_num = 0
@@ -51,22 +51,20 @@ class EKPV_OT_SaveMocapAction(bpy.types.Operator):
                 except (ValueError, IndexError):
                     continue
         except OSError as e:
+            logger.error(f"Error scanning directory: {e}")
             self.report({'ERROR'}, f"Error scanning directory: {e}")
             return {'CANCELLED'}
 
         session_num = max_num + 1
         filename = naming.get_session_filename(date_obj, session_num)
         save_path = mocap_dir / filename
+        logger.info(f"Generated new filename: {filename}")
 
-        # 2. Asset Marking (Optional/Context dependent)
-        # Spec says: "Save Faceit OSC recording as asset-marked action" in Phase 1 reqs
-        # BUT "Core Philosophy: Work directly in the blend file containing mocap data. The saved blend file becomes the persistent mocap recording"
-        # "Feature: Save Faceit OSC recording as asset-marked action in .blend file" -> This likely still applies.
-        # So we should find the action and mark it if present.
-        
+        # 2. Asset Marking
         obj = context.object
         if obj and obj.animation_data and obj.animation_data.action:
             action = obj.animation_data.action
+            logger.debug(f"Marking action as asset: {action.name}")
             action.asset_mark()
             
             # Add Tags
@@ -81,31 +79,16 @@ class EKPV_OT_SaveMocapAction(bpy.types.Operator):
             if desc:
                 action.asset_data.description = f"{character_name} - {desc}"
         
-        # 3. Save Copy
-        # Spec now implies we are saving the "persistent mocap recording".
-        # "Save as .blend file to [ProjectRoot]/_[PROJECT]_Library/Mocap/Face/LiveLink/ directory"
-        # Use save_as_mainfile with copy=True to save a copy, or copy=False to move working file?
-        # "Work directly in the blend file containing mocap data" suggests we might want to Save As (move).
-        # But for safety, "Save Mocap Recording" usually implies creating an artifact.
-        # "The saved blend file becomes the persistent mocap recording... This enables iterative refinement"
-        # I'll stick to copy=True to avoid disrupting the user's current session location unless they want to switch context.
-        # Wait, if they work IN the file, they need to be IN the file.
-        # "Import mocap session -> Save Mocap Recording" -> Likely "Save As".
-        
+        # 3. Save As (Switch to new file)
         try:
-            bpy.ops.wm.save_as_mainfile(filepath=str(save_path), copy=True) 
-            # If we want to switch to it, we'd use copy=False.
-            # But usually "export/save recording" preserves the current scene.
-            # I will keep copy=True as per original impl unless "Save As" is explicit.
-            # Spec says "Save as .blend file", "Work directly in the blend file".
-            # If I just recorded via OSC, I am in an unsaved or temp file.
-            # If I save Copy, I am still in temp file.
-            # I think the intention is to establish the file.
-            # I'll stick to Copy for safety.
-            
-            self.report({'INFO'}, f"Saved Mocap Session: {filename}")
+            logger.info(f"Saving to new session file: {save_path}")
+            # copy=False means "Save As" (current file becomes this new file)
+            bpy.ops.wm.save_as_mainfile(filepath=str(save_path), copy=False)
+            self.report({'INFO'}, f"Saved & Opened Mocap Session: {filename}")
         except Exception as e:
+            logger.error(f"Failed to save file: {e}")
             self.report({'ERROR'}, f"Failed to save file: {e}")
             return {'CANCELLED'}
 
+        logger.info("Mocap Save Complete. Now working in session file.")
         return {'FINISHED'}

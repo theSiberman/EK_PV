@@ -1,7 +1,7 @@
 import bpy
 import os
 from datetime import datetime
-from ..utils import paths, naming, manifest, faceit_detection
+from ..utils import paths, naming, manifest, faceit_detection, logger
 
 class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
     """Export selected timeline markers as expression pose assets"""
@@ -11,18 +11,21 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
+        logger.info("Executing Export Selected Markers...")
         result = self.export_selected_markers(context)
         
         if result['success']:
             msg = f"Exported {result['markers_processed']} expressions"
             if result['errors']:
                 msg += f" (with {len(result['errors'])} errors)"
+            logger.info(msg)
             self.report({'INFO'}, msg)
             return {'FINISHED'}
         else:
             msg = "Export failed"
             if result['errors']:
                 msg += f": {result['errors'][0]}"
+            logger.error(msg)
             self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
@@ -35,107 +38,120 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
             'errors': []
         }
         
-        # Get control rig and its action
+        # Get control rig
         control_rig = faceit_detection.find_faceit_control_rig()
-        if not control_rig or not control_rig.animation_data or not control_rig.animation_data.action:
-            result['errors'].append('No control rig action found')
+        if not control_rig or not control_rig.animation_data:
+            logger.error("No control rig or animation data found")
+            result['errors'].append('No control rig found')
             return result
-        
-        action = control_rig.animation_data.action
+
+        # Capture original state
+        original_action = control_rig.animation_data.action
+        was_tweak_mode = control_rig.animation_data.use_tweak_mode
         
         # Get selected markers
-        # Blender API: context.scene.timeline_markers, check 'select' property
         selected_markers = [m for m in context.scene.timeline_markers if m.select]
-        
         if not selected_markers:
-            result['errors'].append('No markers selected in timeline')
             return result
         
-        # Get character name
+        # Get character name & project root
         character_name = faceit_detection.get_character_name(control_rig)
-        
-        # Get Project Root
         try:
             prefs = context.preferences.addons["EK_PV"].preferences
-        except KeyError:
-            prefs = context.preferences.addons[__package__.split('.')[0]].preferences
-            
-        project_root = prefs.project_root
-        if not project_root:
+            project_root = bpy.path.abspath(prefs.project_root or "//")
+        except:
             project_root = "//"
-        project_root = bpy.path.abspath(project_root)
-        
-        # Process each marker
+
+        # Ensure we are in Pose Mode
+        context.view_layer.objects.active = control_rig
+        bpy.ops.object.mode_set(mode='POSE')
+        bpy.ops.pose.select_all(action='SELECT')
+
         for marker in selected_markers:
+            logger.info(f"Processing marker: {marker.name}")
             try:
-                # Sanitise marker name
-                sanitised_name = naming.sanitise_marker_name(marker.name)
+                # 1. SETUP: Restore Rig to Original State for Sampling
+                # We must exit tweak mode to change the action
+                if control_rig.animation_data.use_tweak_mode:
+                    control_rig.animation_data.use_tweak_mode = False
                 
-                # Generate asset name
-                asset_name = f"FACE_{character_name}_{sanitised_name}"
+                if original_action:
+                    control_rig.animation_data.action = original_action
+                    
+                # Restore tweak mode if that was the state (ensures NLA strip is evaluated correctly)
+                if was_tweak_mode:
+                    control_rig.animation_data.use_tweak_mode = True
                 
-                # Set timeline to marker frame
+                # 2. SAMPLE: Go to frame
                 context.scene.frame_set(marker.frame)
+                context.view_layer.update()
                 
-                # Ensure we are in Pose Mode and Rig selected
-                context.view_layer.objects.active = control_rig
-                bpy.ops.object.mode_set(mode='POSE')
-                bpy.ops.pose.select_all(action='SELECT')
-                
-                # Create pose asset from current frame
-                # Note: create_pose_asset operates on active object's pose
-                bpy.ops.poselib.create_pose_asset(
-                    pose_name=asset_name,
-                    activate_new_action=False # Don't switch the action on the rig
+                # 3. AUTOMATED EXTRACT: Use NLA Bake
+                # use_current_action=False creates a NEW action.
+                bpy.ops.nla.bake(
+                    frame_start=marker.frame,
+                    frame_end=marker.frame,
+                    only_selected=True,
+                    visual_keying=True,
+                    clear_constraints=False,
+                    use_current_action=False, 
+                    bake_types={'POSE'}
                 )
                 
-                # The asset is created in the current file. We need to save it out?
-                # Spec says: "Save as pose asset to expressions library"
-                # This implies saving a .blend file for the asset? 
-                # Or just marking it in the current file?
-                # "Save each pose to [ProjectRoot]/_[PROJECT]_Library/Expressions/[CHARACTER_NAME]/..."
-                # Previous implementation saved individual files. New spec implies the same: 
-                # "The saved blend file becomes the persistent mocap recording" (for the source)
-                # But for the *expression assets*, they need to be in the library.
+                # The baked action is now active. Tweak mode is likely forced off by Bake.
+                new_action = control_rig.animation_data.action
                 
-                # So we assume the newly created pose action needs to be written to a library file.
-                # Find the action we just created. It's not active on the object because activate_new_action=False.
-                # It should be in bpy.data.actions.
-                new_pose_action = bpy.data.actions.get(asset_name)
+                sanitised_name = naming.sanitise_marker_name(marker.name)
+                asset_name = f"FACE_{character_name}_{sanitised_name}"
+                new_action.name = asset_name
                 
-                if new_pose_action:
-                    # Asset Metadata
-                    new_pose_action.asset_mark()
-                    new_pose_action.asset_data.tags.new("facial", skip_if_exists=True)
-                    new_pose_action.asset_data.tags.new(character_name, skip_if_exists=True)
-                    source_file = bpy.path.basename(bpy.data.filepath) or "Unsaved"
-                    new_pose_action.asset_data.description = f"From marker: {marker.name} in {source_file}"
-                    
-                    # Save to individual blend file in library
-                    save_dir = paths.get_expression_dir(project_root, character_name, ensure=True)
-                    save_path = save_dir / f"{asset_name}.blend"
-                    
-                    bpy.data.libraries.write(str(save_path), {new_pose_action})
-                    
-                    # Update manifest
-                    manifest.update_expression_manifest(
-                        project_root=project_root,
-                        asset_name=asset_name,
-                        source_file=source_file,
-                        frame_range=(marker.frame, marker.frame),
-                        marker_name=marker.name,
-                        notes=f"From marker: {marker.name}"
-                    )
-                    
-                    result['markers_processed'] += 1
-                    result['assets_created'].append(asset_name)
-                else:
-                    result['failed_markers'].append(marker.name)
-                    result['errors'].append(f"Could not find created action {asset_name}")
-            
+                # 4. ASSET MARK & SAVE
+                new_action.asset_mark()
+                new_action.asset_data.tags.new("facial", skip_if_exists=True)
+                new_action.asset_data.tags.new(character_name, skip_if_exists=True)
+                source_file = bpy.path.basename(bpy.data.filepath) or "Unsaved"
+                new_action.asset_data.description = f"From marker: {marker.name} in {source_file}"
+                
+                save_dir = paths.get_expression_dir(project_root, character_name, ensure=True)
+                save_path = save_dir / f"{asset_name}.blend"
+                
+                # Write to library
+                bpy.data.libraries.write(str(save_path), {new_action})
+                
+                # Update Manifest
+                manifest.update_expression_manifest(
+                    project_root=project_root,
+                    asset_name=asset_name,
+                    source_file=source_file,
+                    frame_range=(marker.frame, marker.frame),
+                    marker_name=marker.name,
+                    notes=f"From marker: {marker.name}"
+                )
+                
+                result['markers_processed'] += 1
+                result['assets_created'].append(asset_name)
+                logger.info(f"Successfully exported: {asset_name}")
+
             except Exception as e:
+                logger.error(f"Failed to process marker {marker.name}: {e}")
                 result['failed_markers'].append(marker.name)
-                result['errors'].append(f"Failed to process marker '{marker.name}': {str(e)}")
+                result['errors'].append(str(e))
+                
+        # RESTORE FINAL STATE
+        try:
+            if control_rig.animation_data.use_tweak_mode:
+                control_rig.animation_data.use_tweak_mode = False
+                
+            if original_action:
+                control_rig.animation_data.action = original_action
+                
+            if was_tweak_mode:
+                control_rig.animation_data.use_tweak_mode = True
+        except Exception as e:
+             logger.error(f"Failed to restore final state: {e}")
+
+        result['success'] = result['markers_processed'] > 0
+        return result
         
         result['success'] = result['markers_processed'] > 0
         return result
@@ -154,8 +170,11 @@ class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
     )
     
     def execute(self, context):
+        logger.info("Executing Export All Markers...")
+        
         # Determine all markers
         all_markers = context.scene.timeline_markers
+        logger.debug(f"Total markers found: {len(all_markers)}")
         
         # Deselect all first
         for m in all_markers:
@@ -169,7 +188,6 @@ class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
         project_root = bpy.path.abspath(prefs.project_root or "//")
         
         # Check Manifest for processed state
-        # We need a helper in manifest.py to check if processed, or load whole manifest
         man_path = paths.get_manifest_path(project_root, "expression")
         man_data = manifest.load_manifest(man_path)
         marker_state = man_data.get('marker_state', {})
@@ -186,7 +204,10 @@ class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
             
             to_select.append(m)
             
+        logger.info(f"Markers eligible for export: {len(to_select)}")
+        
         if not to_select:
+            logger.info("No eligible markers to export")
             self.report({'INFO'}, "No eligible markers to export")
             return {'CANCELLED'}
             

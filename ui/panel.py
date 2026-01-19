@@ -42,8 +42,8 @@ class EKPV_PT_MainPanel(bpy.types.Panel):
         # Enable based on state
         if state == 'NO_BAKE':
             cleanup_row.enabled = False
-        elif state == 'READY_TO_SAVE':
-            cleanup_row.enabled = False # Already active
+        # elif state == 'READY_TO_SAVE':
+        #     cleanup_row.enabled = False # Allow retry if needed
         
         box.separator()
         

@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Tuple
+from . import logger
 
 def create_backup(manifest_path: Path) -> Path:
     """
@@ -18,9 +19,10 @@ def create_backup(manifest_path: Path) -> Path:
     
     try:
         shutil.copy2(manifest_path, backup_path)
+        logger.debug(f"Manifest backup created: {backup_path}")
         return backup_path
     except OSError as e:
-        print(f"Warning: Failed to create backup: {e}")
+        logger.warning(f"Failed to create backup: {e}")
         return None
 
 def load_manifest(manifest_path: Path) -> Dict[str, Any]:
@@ -28,13 +30,18 @@ def load_manifest(manifest_path: Path) -> Dict[str, Any]:
     Load manifest JSON. Returns empty dict if file doesn't exist or is invalid.
     """
     if not manifest_path.exists():
+        logger.debug(f"Manifest not found at {manifest_path}, starting fresh.")
         return {}
         
     try:
+        if manifest_path.stat().st_size == 0:
+            logger.debug(f"Manifest file {manifest_path} is empty, initializing fresh.")
+            return {}
+            
         with open(manifest_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as e:
-        print(f"Error loading manifest {manifest_path}: {e}")
+        logger.error(f"Error loading manifest {manifest_path}: {e}")
         return {}
 
 def save_manifest(manifest_path: Path, data: Dict[str, Any]) -> bool:
@@ -47,9 +54,10 @@ def save_manifest(manifest_path: Path, data: Dict[str, Any]) -> bool:
         
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
+        logger.debug(f"Manifest saved to {manifest_path}")
         return True
     except OSError as e:
-        print(f"Error saving manifest {manifest_path}: {e}")
+        logger.error(f"Error saving manifest {manifest_path}: {e}")
         return False
 
 def update_expression_manifest(
@@ -127,6 +135,11 @@ def update_expression_manifest(
     
     # Save updated manifest
     success = save_manifest(manifest_path, manifest)
+    
+    if success:
+        logger.info(f"Manifest updated for asset: {asset_name}")
+    else:
+        logger.error(f"Failed to update manifest for asset: {asset_name}")
     
     return {
         'success': success,
