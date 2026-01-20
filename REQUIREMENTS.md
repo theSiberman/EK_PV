@@ -146,6 +146,6 @@ The plugin detects the workflow state to guide the user:
 * **Attribute Errors**: Graceful fallbacks for different Blender versions/Faceit setups.
 
 ## Requirements Summary
-* **Blender**: 4.1+ (Tested on 5.1 Alpha)
+* **Blender**: 4.1, 4.2, 5.0, and 5.1 Alpha (Cross-version compatible)
 * **Python**: 3.11+
 * **Dependencies**: Faceit (for control rig detection), HumanGenerator (optional mesh detection).
