@@ -52,17 +52,20 @@ class EKPV_PT_MainPanel(bpy.types.Panel):
         col.label(text="Current File:")
         col.label(text=bpy.path.basename(bpy.data.filepath) or "Unsaved")
         
-        col.separator()
-        col.operator("ekpv.save_mocap_action", icon='EXPORT')
+                col.separator()
+                col.operator("ekpv.save_mocap_action", icon='EXPORT')
+                
+                box.label(text="Work directly in this file.", icon='INFO')
+                
+                # --- Section 2: Body Motion (Mixamo) ---
+                box = layout.box()
+                box.label(text="Body Motion (Mixamo)", icon='ARMATURE_DATA')
+                
+                col = box.column(align=True)
+                col.operator("ekpv.import_mixamo_fbx", icon='IMPORT', text="Import & Setup Mixamo")
+                col.label(text="Scale: 0.009 | ARP Auto-Config", icon='QUESTION')
         
-        box.label(text="Work directly in this file.", icon='INFO')
-        
-        # --- Section 2: Expression Library ---
-        box = layout.box()
-        box.label(text="Expression Library (Markers)", icon='ASSET_MANAGER')
-        
-        # Marker Stats
-        markers = scene.timeline_markers
+                # --- Section 3: Expression Library ---        markers = scene.timeline_markers
         selected_markers = [m for m in markers if m.select]
         
         # We need to know processed count. 

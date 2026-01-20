@@ -109,6 +109,34 @@ The plugin detects the workflow state to guide the user:
 * Automatically generate and track UUIDs for catalogs.
 * Assign the correct `catalog_id` to exported pose assets during the export process.
 
+### 5. Mixamo Retargeting Automation (Body Poses)
+
+**Feature:** Automate Mixamo FBX import and Auto Rig Pro retargeting setup for body pose creation.
+
+**User Story:** As an animator, I want to automate the repetitive setup steps when importing Mixamo animations so I can focus on selecting and refining poses rather than configuration.
+
+**Workflow Context:**
+After downloading Mixamo FBX:
+- Import FBX into Blender 4.1 retargeting file.
+- Scale Mixamo rig to match HumGen proportions (0.009).
+- Configure Auto Rig Pro retargeting.
+- Load bone mapping preset.
+- Apply common arm rotation corrections.
+- Ready for marker-based pose extraction.
+
+**Implementation Requirements:**
+
+**What Can Be Automated:**
+- ✅ FBX import with correct settings (ignore leaf bones, etc.).
+- ✅ Armature detection and selection.
+- ✅ Standard scale adjustment (0.009).
+- ✅ ARP retargeting setup with preset bone mapping.
+- ✅ Common arm rotation corrections (e.g., T-pose adjustments).
+
+**What Remains Manual:**
+- ❌ Setting armature to REST position (must be done before plugin operation).
+- ❌ Visual verification of retargeting quality.
+
 ## User Interface Design
 
 ### Panel Layout (N-Panel > EK_PV)

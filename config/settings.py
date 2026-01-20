@@ -20,12 +20,19 @@ class EKPV_Preferences(bpy.types.AddonPreferences):
         name="Pose Library Path",
         default="/_Library/Expressions/"
     )
+    
+    arp_preset_path: bpy.props.StringProperty(
+        name="ARP Bone Map Preset",
+        subtype='FILE_PATH',
+        default="//_Library/Presets/Mixamo_to_HumGen.bmap"
+    )
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "project_root")
         layout.prop(self, "mocap_export_path")
         layout.prop(self, "pose_library_path")
+        layout.prop(self, "arp_preset_path")
 
 def register():
     bpy.utils.register_class(EKPV_Preferences)
