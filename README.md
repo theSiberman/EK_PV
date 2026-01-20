@@ -67,5 +67,5 @@ PYTHONPATH=. python3 tests/test_utils.py
 ```
 
 ## Requirements
-*   Blender 4.0+
+*   Blender 4.1+
 *   Faceit Add-on (for control rig detection)
