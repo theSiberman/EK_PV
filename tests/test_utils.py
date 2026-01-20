@@ -99,8 +99,9 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(data["expressions"]["FACE_TEST_Smile"]["source_file"], "Session_001.blend")
         
         self.assertIn("marker_state", data)
-        self.assertIn("smile", data["marker_state"])
-        self.assertTrue(data["marker_state"]["smile"]["processed"])
+        self.assertIn("Session_001.blend", data["marker_state"])
+        self.assertIn("smile", data["marker_state"]["Session_001.blend"])
+        self.assertTrue(data["marker_state"]["Session_001.blend"]["smile"]["processed"])
 
     def test_backup(self):
         # Create initial manifest

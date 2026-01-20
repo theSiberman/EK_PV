@@ -115,9 +115,16 @@ def update_expression_manifest(
         "notes": notes
     }
     
-    # Update marker state if marker name provided
+    # Update marker state
     if marker_name:
-        manifest['marker_state'][marker_name] = {
+        if 'marker_state' not in manifest:
+            manifest['marker_state'] = {}
+            
+        # Structure: marker_state[source_file][marker_name]
+        if source_file not in manifest['marker_state']:
+            manifest['marker_state'][source_file] = {}
+            
+        manifest['marker_state'][source_file][marker_name] = {
             "processed": True,
             "asset_name": asset_name,
             "frame": frame_range[0],
@@ -125,13 +132,23 @@ def update_expression_manifest(
         }
         
     # Update metadata
-    manifest['metadata']['version'] = "1.0"
+    manifest['metadata']['version'] = "1.1"
     manifest['metadata']['last_updated'] = datetime.now().isoformat()
     manifest['metadata']['total_expressions'] = len(manifest['expressions'])
-    manifest['metadata']['total_markers'] = len(manifest['marker_state'])
-    manifest['metadata']['processed_markers'] = sum(
-        1 for m in manifest['marker_state'].values() if m.get('processed', False)
-    )
+    
+    # Count processed markers across all files
+    total_markers = 0
+    processed_markers = 0
+    for file_data in manifest['marker_state'].values():
+        if isinstance(file_data, dict):
+            total_markers += len(file_data)
+            processed_markers += sum(1 for m in file_data.values() if isinstance(m, dict) and m.get('processed', False))
+        else:
+            # Handle potential malformed data or legacy format
+            logger.warning(f"Unexpected data type in marker_state: {type(file_data)}")
+        
+    manifest['metadata']['total_markers'] = total_markers
+    manifest['metadata']['processed_markers'] = processed_markers
     
     # Save updated manifest
     success = save_manifest(manifest_path, manifest)
@@ -148,3 +165,47 @@ def update_expression_manifest(
         'entry_added': True,
         'marker_updated': marker_name is not None
     }
+
+def is_marker_processed(project_root: str, source_file: str, marker_name: str) -> bool:
+    """Check if marker has been processed for a specific source file."""
+    from .paths import get_manifest_path
+    
+    man_path = get_manifest_path(project_root, "expression")
+    manifest = load_manifest(man_path)
+    
+    if 'marker_state' in manifest:
+        # Check new structure
+        if source_file in manifest['marker_state']:
+            if marker_name in manifest['marker_state'][source_file]:
+                return manifest['marker_state'][source_file][marker_name].get('processed', False)
+                
+        # Fallback check for old structure (flat marker names)
+        # (Optional, but good for transition)
+        if marker_name in manifest['marker_state'] and 'processed' in manifest['marker_state'][marker_name]:
+             return manifest['marker_state'][marker_name].get('processed', False)
+             
+    return False
+
+def get_unique_asset_name(project_root: str, base_name: str) -> str:
+    """
+    Ensure asset name is unique by checking manifest.
+    Appends _01, _02 etc if needed.
+    """
+    from .paths import get_manifest_path
+    
+    man_path = get_manifest_path(project_root, "expression")
+    manifest = load_manifest(man_path)
+    
+    if 'expressions' not in manifest:
+        return base_name
+        
+    if base_name not in manifest['expressions']:
+        return base_name
+        
+    # Collision detected
+    idx = 1
+    while True:
+        new_name = f"{base_name}_{idx:02d}"
+        if new_name not in manifest['expressions']:
+            return new_name
+        idx += 1

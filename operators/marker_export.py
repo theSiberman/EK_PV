@@ -1,7 +1,7 @@
 import bpy
 import os
 from datetime import datetime
-from ..utils import paths, naming, manifest, faceit_detection, logger
+from ..utils import paths, naming, manifest, faceit_detection, logger, catalogs
 
 class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
     """Export selected timeline markers as expression pose assets"""
@@ -12,6 +12,19 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
 
     def execute(self, context):
         logger.info("Executing Export Selected Markers...")
+        
+        # 0. PRE-FLIGHT CHECK: Save State
+        if bpy.data.is_dirty or not bpy.data.filepath:
+            msg = "File is unsaved. Please save Mocap Recording before exporting markers."
+            logger.warning(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+            
+        # Optional: Check if filename looks like a session?
+        source_file = bpy.path.basename(bpy.data.filepath)
+        if not source_file.startswith("Session_"):
+            logger.warning(f"Current file '{source_file}' does not look like a standard Mocap Session.")
+            
         result = self.export_selected_markers(context)
         
         if result['success']:
@@ -38,29 +51,58 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
             'errors': []
         }
         
-        # Get control rig
+        # Diagnostic: Check Control Rig
         control_rig = faceit_detection.find_faceit_control_rig()
-        if not control_rig or not control_rig.animation_data:
-            logger.error("No control rig or animation data found")
+        if control_rig:
+            is_lib = control_rig.library is not None
+            is_override = control_rig.override_library is not None
+            has_anim = control_rig.animation_data is not None
+            logger.info(f"Control Rig found: '{control_rig.name}' (Linked: {is_lib}, Override: {is_override}, AnimData: {has_anim})")
+        else:
+            logger.error("No control rig found in scene.")
+            
+        if not control_rig:
             result['errors'].append('No control rig found')
+            return result
+            
+        if not control_rig.animation_data:
+            logger.error(f"Control Rig '{control_rig.name}' has no animation data.")
+            result['errors'].append('No animation data on rig')
             return result
 
         # Capture original state
         original_action = control_rig.animation_data.action
         was_tweak_mode = control_rig.animation_data.use_tweak_mode
         
+        logger.debug(f"Original Action: {original_action.name if original_action else 'None'}, Tweak Mode: {was_tweak_mode}")
+        
         # Get selected markers
         selected_markers = [m for m in context.scene.timeline_markers if m.select]
+        logger.info(f"Selected markers count: {len(selected_markers)}")
+        
         if not selected_markers:
+            logger.warning("No markers selected in timeline.")
+            result['errors'].append('No markers selected')
             return result
         
         # Get character name & project root
         character_name = faceit_detection.get_character_name(control_rig)
+        logger.info(f"Resolved Character Name: '{character_name}'")
+        
         try:
             prefs = context.preferences.addons["EK_PV"].preferences
             project_root = bpy.path.abspath(prefs.project_root or "//")
         except:
             project_root = "//"
+            
+        source_file = bpy.path.basename(bpy.data.filepath)
+
+        # Ensure Catalog Exists
+        lib_path = paths.get_library_path(project_root)
+        catalog_uuid = catalogs.ensure_catalog_exists(lib_path, "POSES/FACE")
+        
+        if not catalog_uuid:
+            logger.warning("Could not ensure asset catalog. Assets will be unassigned.")
 
         # Ensure we are in Pose Mode
         context.view_layer.objects.active = control_rig
@@ -102,14 +144,20 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
                 new_action = control_rig.animation_data.action
                 
                 sanitised_name = naming.sanitise_marker_name(marker.name)
-                asset_name = f"FACE_{character_name}_{sanitised_name}"
+                base_asset_name = f"FACE_{character_name}_{sanitised_name}"
+                
+                # Ensure Unique Name
+                asset_name = manifest.get_unique_asset_name(project_root, base_asset_name)
                 new_action.name = asset_name
                 
                 # 4. ASSET MARK & SAVE
                 new_action.asset_mark()
                 new_action.asset_data.tags.new("facial", skip_if_exists=True)
                 new_action.asset_data.tags.new(character_name, skip_if_exists=True)
-                source_file = bpy.path.basename(bpy.data.filepath) or "Unsaved"
+                
+                if catalog_uuid:
+                    new_action.asset_data.catalog_id = catalog_uuid
+                    
                 new_action.asset_data.description = f"From marker: {marker.name} in {source_file}"
                 
                 save_dir = paths.get_expression_dir(project_root, character_name, ensure=True)
@@ -117,6 +165,11 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
                 
                 # Write to library
                 bpy.data.libraries.write(str(save_path), {new_action})
+                
+                # Cleanup local copy to prevent duplicate assets in browser
+                new_action.asset_clear()
+                control_rig.animation_data.action = None # Unlink
+                bpy.data.actions.remove(new_action)
                 
                 # Update Manifest
                 manifest.update_expression_manifest(
@@ -152,9 +205,6 @@ class EKPV_OT_ExportSelectedMarkers(bpy.types.Operator):
 
         result['success'] = result['markers_processed'] > 0
         return result
-        
-        result['success'] = result['markers_processed'] > 0
-        return result
 
 class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
     """Export all timeline markers as expression pose assets"""
@@ -172,6 +222,13 @@ class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
     def execute(self, context):
         logger.info("Executing Export All Markers...")
         
+        # 0. PRE-FLIGHT CHECK: Save State
+        if bpy.data.is_dirty or not bpy.data.filepath:
+             msg = "File is unsaved. Please save Mocap Recording before exporting markers."
+             logger.warning(msg)
+             self.report({'ERROR'}, msg)
+             return {'CANCELLED'}
+        
         # Determine all markers
         all_markers = context.scene.timeline_markers
         logger.debug(f"Total markers found: {len(all_markers)}")
@@ -186,18 +243,12 @@ class EKPV_OT_ExportAllMarkers(bpy.types.Operator):
         except KeyError:
             prefs = context.preferences.addons[__package__.split('.')[0]].preferences
         project_root = bpy.path.abspath(prefs.project_root or "//")
+        source_file = bpy.path.basename(bpy.data.filepath)
         
         # Check Manifest for processed state
-        man_path = paths.get_manifest_path(project_root, "expression")
-        man_data = manifest.load_manifest(man_path)
-        marker_state = man_data.get('marker_state', {})
-        
         to_select = []
         for m in all_markers:
-            is_processed = False
-            if m.name in marker_state:
-                if marker_state[m.name].get('processed', False):
-                    is_processed = True
+            is_processed = manifest.is_marker_processed(project_root, source_file, m.name)
             
             if self.skip_processed and is_processed:
                 continue
